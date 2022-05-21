@@ -39,7 +39,7 @@ int ms5611_config(void) {
 
 
 void ms5611_initializeSampleStateMachine(void) {
-   ms5611_triggerTemperatureSample();
+
    SensorState_ = MS5611_READ_TEMPERATURE;
    }
 
@@ -62,8 +62,35 @@ int ms5611_sampleStateMachine(void) {
       	}
    	return 0;    
    	}
+void ms5611_triggerTemperatureSample()
+{
+    Wire.beginTransmission(MS5611_ADDRESS);
 
+    #if ARDUINO >= 100
+	Wire.write(MS5611_CMD_CONVERT_D2 | MS5611_CMD_ADC_4096);
+    #else
+	Wire.send(MS5611_CMD_CONVERT_D2 | MS5611_CMD_ADC_4096);
+    #endif
 
+    Wire.endTransmission();
+
+}
+void ms5611_triggerPressureSample()
+{
+    Wire.beginTransmission(MS5611_ADDRESS);
+
+    #if ARDUINO >= 100
+	Wire.write(MS5611_CMD_CONVERT_D1 | MS5611_CMD_ADC_4096);
+    #else
+	Wire.send(MS5611_CMD_CONVERT_D1 | S5611_CMD_ADC_4096);
+    #endif
+
+    Wire.endTransmission();
+}
+uint32_t ms5611_readSample(void)
+{
+    return readRegister24(MS5611_CMD_ADC_READ);
+}
 #if MS5611_MEASURE_NOISE
 static float pa_to_zcm(float pa) {
     return 4430769.396f * (1.0f - pow(pa/101325.0f, 0.190284f));
@@ -126,12 +153,12 @@ void ms5611_averagedSample(int numSamples) {
    	tAccum = 0;
 	n = numSamples;
    	while (n--) {
-		ms5611_triggerTemperatureSample();
-		delayMs(MS5611_SAMPLE_PERIOD_MS);
+        ms5611_triggerTemperatureSample();
+        delay(MS5611_SAMPLE_PERIOD_MS);
 		D2_ = ms5611_readSample();
 		ms5611_calculateTemperatureC();
-		ms5611_triggerPressureSample();
-		delayMs(MS5611_SAMPLE_PERIOD_MS);
+        ms5611_triggerPressureSample();
+        delay(MS5611_SAMPLE_PERIOD_MS);
 		D1_ = ms5611_readSample();
 		pa = ms5611_calculatePressurePa();
 		pAccum += pa;
@@ -170,40 +197,6 @@ float ms5611_pa2Cm(float paf)  {
       	}
    	return zf;
    	}
-
-uint32_t readRawTemperature(void)
-{
-    Wire.beginTransmission(MS5611_ADDRESS);
-
-    #if ARDUINO >= 100
-	Wire.write(MS5611_CMD_CONVERT_D2 | MS5611_CMD_ADC_4096);
-    #else
-	Wire.send(MS5611_CMD_CONVERT_D2 | MS5611_CMD_ADC_4096);
-    #endif
-
-    Wire.endTransmission();
-
-    delay(MS5611_SAMPLE_PERIOD_MS);
-
-    return readRegister24(MS5611_CMD_ADC_READ);
-}
-
-uint32_t readRawPressure(void)
-{
-    Wire.beginTransmission(MS5611_ADDRESS);
-
-    #if ARDUINO >= 100
-	Wire.write(MS5611_CMD_CONVERT_D1 | MS5611_CMD_ADC_4096);
-    #else
-	Wire.send(MS5611_CMD_CONVERT_D1 | S5611_CMD_ADC_4096);
-    #endif
-
-    Wire.endTransmission();
-
-    delay(MS5611_SAMPLE_PERIOD_MS);
-
-    return readRegister24(MS5611_CMD_ADC_READ);
-}
 
 uint32_t readRegister24(uint8_t reg)
 {

@@ -16,9 +16,7 @@
 #define MS5611_CMD_READ_PROM          (0xA2)
 
 
-void 	ms5611_triggerPressureSample(void);
-void 	ms5611_triggerTemperatureSample(void);
-uint32_t  	ms5611_readSample(void);
+
 void 	ms5611_averagedSample(int numSamples);	
 void  	ms5611_calculateTemperatureC(void);
 float  	ms5611_calculatePressurePa(void);
@@ -33,6 +31,9 @@ void 	ms5611_readPROM(void);
 void 	ms5611_getCalibrationParameters(void);
 void 	ms5611_reset(void);
 
+uint32_t ms5611_readSample(void);
+void ms5611_triggerTemperatureSample();
+void ms5611_triggerPressureSample();
 
 uint32_t readRegister24(uint8_t reg);
 uint16_t readRegister16(uint8_t reg);

@@ -41,6 +41,7 @@ static void vario_task(void *pvParameter);
 static void main_task(void* pvParameter);
 static void IRAM_ATTR drdyHandler(void);
 MPU9250 mpu9250;
+
 void pinConfig() {	
     // using NS8002 amp module, external 100K pullup resistor to 5V. Pull down to enable.
 
@@ -68,7 +69,6 @@ static void ui_task(void *pvParameter) {
                 counter = 0;
                 // GPS update interval = 0.1s => display update interval =  0.5s
                 memcpy(&navpvt, (void*)&NavPvt, sizeof(NAV_PVT)); 
-                ui_updateFlightDisplay(&navpvt,&track);
                 }
 			}
         if (IsGpsTrackActive && EndGpsTrack) {
@@ -83,7 +83,6 @@ static void ui_task(void *pvParameter) {
             Serial.println(buffer);
             sprintf(buffer, "Max Sink  %.1fm/s", track.maxSinkrateCps/100.0f);
             Serial.println(buffer);
-            ui_saveFlightLogSummary(&navpvt, &track);
             while(1) delayMs(100);
             }
 
@@ -325,11 +324,7 @@ static void main_task(void* pvParameter) {
         server_init();
         }
     else { // GPS Vario mode
-        ui_screenInit();
-        ui_displayOptions();
-        while (ui_optionsEventHandler() == 0) {
-            delayMs(30);
-            }
+
         if (rte_selectRoute()) {
             int32_t rteDistance = rte_totalDistance();
 
