@@ -1,6 +1,6 @@
 #include "common.h"
 #include <FS.h>
-#include <LittleFS.h>
+#include <LITTLEFS.h>
 #include <math.h>
 #include "config.h"
 #include "drv/btn.h"
@@ -17,7 +17,6 @@
 static const char* TAG = "ui";
 
 bool IsRouteActive = false;
-bool IsSpeakerEnabled  = true;
 bool IsGpsFixStable = false;
 bool IsGpsTrackActive = false;
 bool IsLcdBkltEnabled = false;
@@ -642,10 +641,10 @@ int ui_saveFlightLogSummary(NAV_PVT* pn, TRACK* pTrk) {
 	char szEntry[110];
 	ssize_t nwrote;
 	int len;
-	File fd = LittleFS.open("/flightlog.txt", FILE_READ);
+	File fd = LITTLEFS.open("/flightlog.txt", FILE_READ);
 	// if flight log does not exist, create it with a comment header
 	if (!fd) {
-		fd = LittleFS.open("/flightlog.txt", FILE_WRITE);
+		fd = LITTLEFS.open("/flightlog.txt", FILE_WRITE);
 		sprintf(szEntry,"Year Month Day sHour sMin durHour durMin sLat sLon sAlt eLat eLon eAlt maxAlt maxClimb maxSink\r\n");
 		nwrote = fd.print(szEntry);
 		if (nwrote != len) {
@@ -657,7 +656,7 @@ int ui_saveFlightLogSummary(NAV_PVT* pn, TRACK* pTrk) {
 	fd.close();
 
 	// open in append mode
-	fd = LittleFS.open("/flightlog.txt", FILE_APPEND);
+	fd = LITTLEFS.open("/flightlog.txt", FILE_APPEND);
 	if (!fd) {
 		ESP_LOGE(TAG,"Error opening flightlog.txt in append mode");
 		return -2;

@@ -1,34 +1,22 @@
 #include "common.h"
 #include <FS.h>
-#include <LittleFS.h>
+#include "LITTLEFS.h"
 #include <WiFi.h>              
 #include "common.h"
 #include "config.h"
 #include "drv/cct.h"
-#include "drv/spiflash.h"
-#include "drv/audio.h"
-#include "drv/vspi.h"
-#include "drv/hspi.h"
-#include "drv/btn.h"
 #include "drv/wdog.h"
 #include "sensor/mpu9250.h"
 #include "sensor/gps.h"
 #include "sensor/madc.h"
 #include "sensor/ringbuf.h"
 #include "sensor/imu.h"
-#if USE_MS5611
 #include "sensor/ms5611.h"
-#elif USE_BMP388
-#include "sensor/bmp388.h"
-#endif
 #include "sensor/kalmanfilter4d.h"
 #include "nv/flashlog.h"
 #include "nv/calib.h"
 #include "nv/options.h"
-#include "bt/btmsg.h"
 #include "wifi/async_server.h"
-#include "ui/lcd7565.h"
-#include "ui/vario_audio.h"
 #include "ui/ui.h"
 #include "ui/route.h"
 
@@ -36,7 +24,6 @@ static const char* TAG = "main";
 
 volatile int LedState = 0;
 volatile float KFAltitudeCm, KFClimbrateCps,DisplayClimbrateCps;
-volatile int AudioCps;
 volatile float YawDeg, PitchDeg, RollDeg;
 volatile SemaphoreHandle_t DrdySemaphore;
 volatile bool DrdyFlag = false;
@@ -44,6 +31,7 @@ volatile bool DrdyFlag = false;
 int BacklitCounter;
 bool IsGpsInitComplete = false;
 bool IsServer = false; 
+char *buffer;
 
 static void pinConfig();
 static void vario_taskConfig();
@@ -55,59 +43,12 @@ static void main_task(void* pvParameter);
 static void IRAM_ATTR drdyHandler(void);
 
 void pinConfig() {	
-    pinMode(pinLcdBklt, OUTPUT);
-    LCD_BKLT_OFF();
-    pinMode(pinLcdRST, OUTPUT);
-    pinMode(pinLcdCS, OUTPUT);
-    LCD_RST_HI();
-    LCD_CS_HI();
-    pinMode(pinLcdA0, OUTPUT);
-
-    pinMode(pinFlashCS, OUTPUT);
-    pinMode(pinImuCS, OUTPUT);
-#if USE_MS5611    
-    pinMode(pinMS5611CS, OUTPUT);
-    MS5611_CS_HI();
-#elif USE_BMP388    
-    pinMode(pinBMP388CS, OUTPUT);
-    BMP388_CS_HI();
-#endif
-    FLASH_CS_HI();
-    IMU_CS_HI();
-
     // using NS8002 amp module, external 100K pullup resistor to 5V. Pull down to enable.
-    pinMode(pinAudioAmpEna, OUTPUT_OPEN_DRAIN); 
-    AUDIO_AMP_DISABLE();
-
-    pinMode(pinBtn0, INPUT_PULLUP); 
-    pinMode(pinBtnL, INPUT); // external 10K pullup
-    pinMode(pinBtnM, INPUT); // external 10K pullup
-    pinMode(pinBtnR, INPUT); // external 10K pullup
 
     pinMode(pinLED, OUTPUT);
     LED_OFF();
 
     pinMode(pinDRDYINT, INPUT); // external 10K pullup
-    }
-
-
-static void btserial_task(void *pvParameter) {
-    ESP_LOGI(TAG, "Starting btserial task on core %d with priority %d", xPortGetCoreID(), uxTaskPriorityGet(NULL));
-	char szmsg[100];
-
-    while (1) {
-		if (opt.misc.btMsgType == BT_MSG_LK8EX1) {
-            int32_t altM = KFAltitudeCm > 0.0f ? (int)((KFAltitudeCm + 50.0f)/100.0f) : (int)((KFAltitudeCm - 50.0f)/100.0f);
-			btmsg_genLK8EX1(szmsg, altM, AudioCps, SupplyVoltageV);
-			}
-		else
-		if (opt.misc.btMsgType == BT_MSG_XCTRC) {
-			btmsg_genXCTRC(szmsg);
-			}
-        btmsg_tx_message(szmsg);
-		delayMs(1000/opt.misc.btMsgFreqHz);
-		}
-    vTaskDelete(NULL);
     }
 
 
@@ -117,10 +58,7 @@ static void ui_task(void *pvParameter) {
     NAV_PVT navpvt;
     TRACK  track;
     IsGpsFixStable = false;
-    IsLoggingIBG = false;
     IsGpsTrackActive = false;
-    IsLcdBkltEnabled = false;
-    IsSpeakerEnabled = true;
     EndGpsTrack = false;
 
     while(1) {
@@ -136,12 +74,16 @@ static void ui_task(void *pvParameter) {
 			}
         if (IsGpsTrackActive && EndGpsTrack) {
             IsGpsTrackActive = false;
-            lcd_clear_frame();
-            lcd_printlnf(false, 1, "%4d/%02d/%02d %02d:%02d", track.year, track.month, track.day, track.hour, track.minute);
-            lcd_printlnf(false, 2, "Duration %02dhr %02dmin", track.elapsedHours, track.elapsedMinutes);
-            lcd_printlnf(false, 3, "Alt St %4dm Mx %4dm", track.startAltm, track.maxAltm);
-            lcd_printlnf(false, 4, "Max Climb +%.1fm/s", track.maxClimbrateCps/100.0f);
-            lcd_printlnf(true, 5, "Max Sink  %.1fm/s", track.maxSinkrateCps/100.0f);
+            sprintf(buffer,  "%4d/%02d/%02d %02d:%02d", track.year, track.month, track.day, track.hour, track.minute);
+            Serial.println(buffer);
+            sprintf(buffer, "Duration %02dhr %02dmin", track.elapsedHours, track.elapsedMinutes);
+            Serial.println(buffer);
+            sprintf(buffer, "Alt St %4dm Mx %4dm", track.startAltm, track.maxAltm);
+            Serial.println(buffer);
+            sprintf(buffer, "Max Climb +%.1fm/s", track.maxClimbrateCps/100.0f);
+            Serial.println(buffer);
+            sprintf(buffer, "Max Sink  %.1fm/s", track.maxSinkrateCps/100.0f);
+            Serial.println(buffer);
             ui_saveFlightLogSummary(&navpvt, &track);
             while(1) delayMs(100);
             }
@@ -156,8 +98,7 @@ static void gps_task(void *pvParameter) {
     ESP_LOGI(TAG, "Starting gps task on core %d with priority %d", xPortGetCoreID(), uxTaskPriorityGet(NULL));
     if (!gps_config()) {
         ESP_LOGE(TAG, "error configuring gps");
-		lcd_clear_frame();
-		lcd_printlnf(true,3,"GPS init error");
+		Serial.println("GPS init error");
         while (1) delayMs(100);
         }
     IsGpsInitComplete = true;
@@ -182,57 +123,59 @@ static void IRAM_ATTR drdyHandler(void) {
 
 static void vario_taskConfig() {
     ESP_LOGI(TAG, "vario config");
-    lcd_clear_frame();
     if (mpu9250_config() < 0) {
         ESP_LOGE(TAG, "error MPU9250 config");
-		lcd_printlnf(true,3,"MPU9250 config failed");
+		Serial.println("MPU9250 config failed");
         while (1) {delayMs(100);};
         }
-
-    btn_clear();
     // if calib.txt not found, enforce accel and mag calibration and write new calib.txt
     bool isAccelMagCalibRequired = !IsCalibrated;
     int counter = 300;
     while ((!isAccelMagCalibRequired) && counter--) {
-   	    lcd_printlnf(true,3,"Gyro calib in %ds",(counter+50)/100);
-        if (BTN0() == LOW) {
+
+   	    sprintf(buffer, "Gyro calib in %ds",(counter+50)/100);
+           Serial.println(buffer);
             // manually force accel+mag calibration by pressing BTN0 during gyro calib countdown
-            isAccelMagCalibRequired = true; 
-            break;
-            }
+           
+            //isAccelMagCalibRequired = true; 
+            //break;
+
         delayMs(10);	
 		}
     if (isAccelMagCalibRequired) {
         counter = 8;
         while (counter--) {
-            lcd_printlnf(true,3,"Accel calib in %ds",counter+1);
+            sprintf(buffer, "Accel calib in %ds",counter+1);
+            Serial.println(buffer);
             delayMs(1000);	
             }
-        lcd_printlnf(true,3, "Calibrating Accel...");
+        Serial.println("Calibrating Accel...");
         if (mpu9250_calibrateAccel() < 0) {
- 	        lcd_printlnf(true,3,"Accel calib failed");
+ 	        Serial.println("Accel calib failed");
             while (1) {delayMs(100);};
             }
         delayMs(1000);
         counter = 5;
         while (counter--) {
-            lcd_printlnf(true,3,"Mag calib in %ds",counter+1);
+            sprintf(buffer, "Mag calib in %ds",counter+1);
+            Serial.println(buffer);
             delayMs(1000);	
             }
-        lcd_printlnf(true,3,"Calibrating Mag...");
+        Serial.println("Calibrating Mag...");
         if (mpu9250_calibrateMag()  < 0 ) {
- 	        lcd_printlnf(true,3,"Mag calib failed");
+ 	        Serial.println("Mag calib failed");
             }
         }
     if (isAccelMagCalibRequired) {
         counter = 3;
         while (counter--) {
-            lcd_printlnf(true,3,"Gyro calib in %ds",counter+1);
+            sprintf(buffer, "Gyro calib in %ds",counter+1);
+            Serial.println(buffer);
             }
         }
-    lcd_printlnf(true,3,"Calibrating Gyro...");
+    Serial.println("Calibrating Gyro...");
     if (mpu9250_calibrateGyro() < 0) {
- 	    lcd_printlnf(true,3,"Gyro calib fail");
+ 	    Serial.println("Gyro calib fail");
         delayMs(1000);
         }
    // mpu9250_dump_noise_samples();
@@ -240,40 +183,22 @@ static void vario_taskConfig() {
 #if USE_MS5611
     if (ms5611_config() < 0) {
         ESP_LOGE(TAG, "error MS5611 config");
-        lcd_printlnf(true,3, "MS5611 config fail");
+        Serial.println("MS5611 config fail");
         while (1) {delayMs(100);}
         }	
     ms5611_averagedSample(20);
     ESP_LOGD(TAG,"MS5611 Altitude %dm Temperature %dC", (int)(ZCmAvg_MS5611/100.0f), (int)CelsiusSample_MS5611);
     float zcm = ZCmAvg_MS5611;
     ms5611_initializeSampleStateMachine();
-#elif USE_BMP388    
-    if (bmp388_config() < 0) {
-        ESP_LOGE(TAG, "error BMP388 config");
-        lcd_printlnf(true,3, "BMP388 config fail");
-        while (1) {delayMs(100);}
-        }	
-    {
-    uint32_t marker =  cct_setMarker();
-    bmp388_sample();
-    uint32_t eus = cct_elapsedUs(marker);
-    ESP_LOGD(TAG, "BMP388 sample and pa2z : %d us", eus);
-    }
-    
-    bmp388_averaged_sample(20);
-    ESP_LOGD(TAG,"BMP388 Altitude %dm Temperature %dC", (int)(ZCmAvg_BMP388/100.0f), (int)CelsiusSample_BMP388);
-    float zcm = ZCmAvg_BMP388;
 #endif
 
     // KF4D algorithm to fuse gravity-compensated acceleration and pressure altitude to estimate
     // altitude and climb/sink rate
     kalmanFilter4d_configure(1000.0f*(float)opt.kf.accelVariance, KF_ADAPT, zcm, 0.0f, 0.0f);
 
-    lcd_clear_frame();
-    lcd_printlnf(true,3,"Baro Altitude %dm", (int)(zcm/100.0f));
+    sprintf(buffer, "Baro Altitude %dm", (int)(zcm/100.0f));
+    Serial.println(buffer);
     // switch to high clock frequency for sensor readout & flash writes
-    vspi_setClockFreq(VSPI_CLK_HIGH_FREQHZ); 
-    vaudio_config();
     ringbuf_init(); 
     }
 
@@ -325,7 +250,7 @@ static void vario_task(void *pvParameter) {
         float gravityCompensatedAccel = imu_gravityCompensatedAccel(axNEDmG, ayNEDmG, azNEDmG, q0, q1, q2, q3);
         ringbuf_addSample(gravityCompensatedAccel);
         kfTimeDeltaUSecs += imuTimeDeltaUSecs;
-#if USE_MS5611
+
         if (baroCounter >= 5) { // 5*2mS = 10mS elapsed, this is the sampling period for MS5611, 
             baroCounter = 0;     // alternating between pressure and temperature samples
             int zMeasurementAvailable = ms5611_sampleStateMachine(); 
@@ -338,10 +263,6 @@ static void vario_task(void *pvParameter) {
                 kfTimeDeltaUSecs = 0.0f;
                 // LCD display shows damped climbrate
                 DisplayClimbrateCps = (DisplayClimbrateCps*(float)opt.vario.varioDisplayIIR + KFClimbrateCps*(100.0f - (float)opt.vario.varioDisplayIIR))/100.0f; 
-                AudioCps = INTEGER_ROUNDUP(KFClimbrateCps);
-                if (IsSpeakerEnabled) {
-                    vaudio_tick_handler(AudioCps);                
-                    }
 			    if ((opt.misc.logType == LOGTYPE_IBG) && FlashLogMutex) {
 			        if ( xSemaphoreTake( FlashLogMutex, portMAX_DELAY )) {
                         FlashLogIBGRecord.hdr.baroFlags = 1;
@@ -351,30 +272,6 @@ static void vario_task(void *pvParameter) {
 				    }
                 }    
             } 
-#elif USE_BMP388
-        if (baroCounter >= 10) { // 10*2mS = 20mS elapsed, this is the configured sampling period for BMP388
-            baroCounter = 0;     
-            bmp388_sample();
-            // KF4 uses the acceleration data in the update phase
-            float zAccelAverage = ringbuf_averageNewestSamples(10); 
-            kalmanFilter4_predict(kfTimeDeltaUSecs/1000000.0f);
-            kalmanFilter4_update(ZCmSample_BMP388, zAccelAverage, (float*)&KFAltitudeCm, (float*)&KFClimbrateCps);
-            kfTimeDeltaUSecs = 0.0f;
-            // LCD display shows damped climbrate
-            DisplayClimbrateCps = (DisplayClimbrateCps*(float)opt.vario.varioDisplayIIR + KFClimbrateCps*(100.0f - (float)opt.vario.varioDisplayIIR))/100.0f; 
-            int32_t audioCps = INTEGER_ROUNDUP(KFClimbrateCps);
-            if (IsSpeakerEnabled) {
-                beeper_beep(audioCps);                
-                }
-		    if ((opt.misc.logType == LOGTYPE_IBG) && FlashLogMutex) {
-		        if ( xSemaphoreTake( FlashLogMutex, portMAX_DELAY )) {
-                    FlashLogIBGRecord.hdr.baroFlags = 1;
-	                FlashLogIBGRecord.baro.heightMSLcm = ZCmSample_BMP388;
-					xSemaphoreGive( FlashLogMutex );
-					}
-				}
-            }    
-#endif
         if ((opt.misc.logType == LOGTYPE_IBG) && FlashLogMutex) {
 		    if (xSemaphoreTake( FlashLogMutex, portMAX_DELAY )) {      
                 FlashLogIBGRecord.hdr.magic = FLASHLOG_IBG_MAGIC;
@@ -444,7 +341,7 @@ static void main_task(void* pvParameter) {
     
     ESP_LOGD(TAG, "Mounting LittleFS ...");
     // do NOT format, partition is built and flashed using PlatformIO Build FileSystem Image + Upload FileSystem Image    
-    if (!LittleFS.begin(false)) { 
+    if (!LITTLEFS.begin(false)) { 
 	ESP_LOGE(TAG, "Cannot mount LittleFS, Rebooting");
 	delay(1000);
 	ESP.restart();
@@ -456,105 +353,60 @@ static void main_task(void* pvParameter) {
     // so you only have to specify the parameters you want to modify, in the file options.txt
     opt_init();
     // configure DAC sine-wave tone generation
-    audio_config(pinAudioDAC);
  
     // HSPI bus used for 128x64 LCD display
-    hspi_config(pinHSCLK,-1, pinHMOSI,-1,HSPI_CLK_FREQHZ);
-    lcd_init(opt.misc.lcdContrast);
-    LCD_BKLT_ON();
+    
     BacklitCounter = opt.misc.backlitSecs*40;
     adc_init();
     SupplyVoltageV = adc_battery_voltage();
     ESP_LOGD(TAG, "Power = %.1fV", SupplyVoltageV);
-    lcd_printlnf(false,0,"%s %s", __DATE__, __TIME__);
-    lcd_printlnf(true,1,"Power : %.1fV", SupplyVoltageV);
+
+    sprintf(buffer, "%s %s", __DATE__, __TIME__);
+    Serial.println(buffer);
+
+    sprintf(buffer,"Power : %.1fV", SupplyVoltageV);
+    Serial.println(buffer);
+
 
     // VSPI bus used for MPU9250, MS5611 and 128Mbit spi flash
     // start with low clock frequency for sensor configuration
-    vspi_config(pinVSCLK, pinVMOSI, pinVMISO, VSPI_CLK_CONFIG_FREQHZ);
     if (flashlog_init() < 0) {
 	    ESP_LOGE(TAG, "Spi flash log error");
-	    lcd_printlnf(true,3,"Flash Error");		
+	    Serial.println("Flash Error");		
 	    while (1) {delayMs(100);}
 	    }
 
-    lcd_printlnf(true,3,"Data log : %d %% used", DATALOG_PERCENT_USED()); 
+    //lcd_printlnf(true,3,"Data log : %d %% used", DATALOG_PERCENT_USED()); 
+    
     delayMs(2000);
-    btn_clear();
-
-    ESP_LOGI(TAG,"Press btn0 within 3 seconds to erase flash");
-    LED_ON();
-    bool isEraseRequired = false;
-    int counter = 300;
-    while (counter--) {
-        lcd_printlnf(true,4,"btn0 to erase : %ds",(counter+50)/100);
-        if (BTN0() == LOW) {
-            ESP_LOGI(TAG,"btn0 PRESSED");
-            isEraseRequired = true;
-            break;
-            }
-        delayMs(10);	
-        }
-    if (isEraseRequired) {
-        ESP_LOGI(TAG, "Erasing flash...");
-	    spiflash_globalUnprotect();
-        if (FlashLogFreeAddress == 0) {
-            FlashLogFreeAddress = FLASH_SIZE_BYTES-1; // manually force erase of entire chip
-            }
-        uint32_t lastSectorAddress = FlashLogFreeAddress & 0xFFFFF000; // sector size = 4096
-	    for (uint32_t sectorAddress = 0; sectorAddress <= lastSectorAddress; sectorAddress += 4096) {
-		    spiflash_sectorErase(sectorAddress);
-		    ESP_LOGD(TAG,"%4X",sectorAddress>>12);
-		    lcd_printlnf(true,4, "Erasing %03X", sectorAddress>>12);
-            feed_watchdog(); // flash erase takes time, feed watchdog to avoid reset
-		    }
-        spiflash_reset();
-        FlashLogFreeAddress = 0;
-        lcd_printlnf(false,3,"Data log : %d %% used", DATALOG_PERCENT_USED());
-	    ESP_LOGI(TAG,"Erased");
-        lcd_printlnf(true,4,"Erased");
-        }
-    delayMs(1000);
-    IsServer = false;
+    IsServer = 1;
     ESP_LOGI(TAG,"Press btn0 within 3 seconds to start WiFi AP and web server");
-    counter = 300;
-    while (counter--) {
-        lcd_printlnf(true,4,"btn0 for wifi cfg: %ds",(counter+50)/100);
-        if (BTN0() == LOW) {
-            ESP_LOGI(TAG,"btn0 Pressed, starting WiFi AP and web server");
-            IsServer = 1;
-            break;
-            }
-        delayMs(10);
-        }
     if (IsServer) { // Wifi Configuration mode
-        lcd_clear_frame();
-        lcd_printlnf(false,0,"WiFi Access Point :");
-        lcd_printlnf(false,1," \"ESP32GpsVario\"");
-        lcd_printlnf(false,3,"Web Page :");
-        lcd_printlnf(false,4," http://esp32.local");
-        lcd_printlnf(true,5," 192.168.4.1");
+        Serial.println("WiFi Access Point :");
+        Serial.println(" \"ESP32GpsVario\"");
+        Serial.println("Web Page :");
+        Serial.println(" http://esp32.local");
+        
         ESP_LOGI(TAG, "Wifi access point ESP32GpsVario starting...");
         WiFi.mode(WIFI_AP);
         WiFi.softAP("ESP32GpsVario");
         IPAddress myIP = WiFi.softAPIP();
+        Serial.println(myIP);
         ESP_LOGI(TAG,"WiFi Access Point IP address: %s", myIP.toString().c_str());
-        LCD_BKLT_OFF();
         server_init();
         }
     else { // GPS Vario mode
         ui_screenInit();
         ui_displayOptions();
-        btn_clear();
         while (ui_optionsEventHandler() == 0) {
-            btn_debounce();
             delayMs(30);
             }
         if (rte_selectRoute()) {
             int32_t rteDistance = rte_totalDistance();
-            lcd_clear_frame();
-            lcd_printlnf(true,0,"Route %.2fkm", ((float)rteDistance)/1000.0f);
-            delayMs(1000);
+
+           sprintf(buffer,"Route %.2fkm", ((float)rteDistance)/1000.0f);
+           Serial.println(buffer);
+           delayMs(1000);
             IsRouteActive = true;
             }
         vario_taskConfig();   	
@@ -569,13 +421,6 @@ static void main_task(void* pvParameter) {
             }
         // ui_task on core 0 given lower priority than gps_task
 	    xTaskCreatePinnedToCore(&ui_task, "uitask", 4096, NULL, configMAX_PRIORITIES-3, NULL, CORE_0);
-	    if (opt.misc.btMsgFreqHz != 0) {
-            if (btmsg_init() == true) {
-    		    IsBluetoothEnabled = true;
-                // bluetooth serial task on core 0 given higher priority than ui task, less than gps task
-    		    xTaskCreatePinnedToCore(&btserial_task, "btserialtask", 3072, NULL, configMAX_PRIORITIES-2, NULL, CORE_0);
-                }
-	    	}
       }
     while (1) {
         loop();
@@ -589,50 +434,6 @@ void loop() {
         ESP_LOGV(TAG, "Loop priority = %d", uxTaskPriorityGet(NULL));
         delayMs(500); // delay() is required to yield to other tasks
         return;
-        }    
-    btn_debounce();
-    if (BtnRPressed || BtnLPressed || BtnMPressed || Btn0Pressed) {
-        // invert display for one frame to acknowledge button press
-        IsFlashDisplayRequired = true; 
-        // turn on backlight for user configurable time if a button is pressed
-        BacklitCounter = opt.misc.backlitSecs*40;   // loop delay is ~25mS, 40*25 = 1second
-        LCD_BKLT_ON();
-        }
-    if (BacklitCounter) {
-        BacklitCounter--;
-        if (BacklitCounter <= 0) LCD_BKLT_OFF();
-        }
-    if (BtnRPressed) {
-        btn_clear();
-        ESP_LOGV(TAG,"Btn R");
-        IsSpeakerEnabled = !IsSpeakerEnabled; // mute/enable speaker
-        }
-    if (BtnLPressed) {
-        btn_clear();
-        ESP_LOGV(TAG,"Btn L");
-        IsGpsHeading = !IsGpsHeading; // toggle between gps course heading and magnetic compass heading
-        }
-    if (BtnMPressed) {
-        btn_clear();
-        ESP_LOGV(TAG,"Btn M"); // start/stop high-speed IBG data logging. Does nothing for GPS track logging.
-        if (opt.misc.logType == LOGTYPE_IBG) {
-            if (!IsLoggingIBG) {
-                IsLoggingIBG = true;
-                ESP_LOGV(TAG,"IBG Logging started");
-                }
-            else {
-                IsLoggingIBG = false;
-                ESP_LOGV(TAG,"IBG Logging stopped");
-                }
-            }
-        }
-    if (Btn0Pressed) {
-        btn_clear();
-        ESP_LOGV(TAG,"Btn 0");
-        if (IsGpsTrackActive)  {
-            EndGpsTrack = true;
-            IsSpeakerEnabled = false;
-            }
         }
     delayMs(25);
     }
@@ -643,6 +444,7 @@ void loop() {
 // Core 0 : ui, GPS, Bluetooth tasks
 // Core 1 : setup() + loop(), wifi config / vario task
 void setup() {
+    Serial.begin(115200);
     xTaskCreatePinnedToCore(&main_task, "main_task", 16384, NULL, configMAX_PRIORITIES-4, NULL, CORE_1);
     vTaskDelete(NULL);
     }
