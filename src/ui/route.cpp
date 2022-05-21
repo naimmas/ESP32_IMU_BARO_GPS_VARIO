@@ -2,9 +2,7 @@
 #include <FS.h>
 #include <LittleFS.h>
 #include "config.h"
-#include "drv/btn.h"
 #include "nv/options.h"
-#include "lcd7565.h"
 #include "ui.h"
 #include "route.h"
 
@@ -68,9 +66,7 @@ bool rte_selectRoute(){
 	ESP_LOGD(TAG, "Number of routes found = %d", NumRoutes);
 	RouteSel = 0; // default : do not use a route
 	rte_displayRouteSel();
-	btn_clear();
 	while (!rte_handleRouteSelEvent()) {
-		btn_debounce();
 		delayMs(30);
 		}
 	if (RouteSel == 0) return false;
@@ -80,12 +76,14 @@ bool rte_selectRoute(){
 
 
 static void rte_displayRouteSel() {
-	lcd_clear_frame();
-	lcd_printlnf(false, 0, "%cNo route", RouteSel == 0 ? '*' : ' ');
+   char *buff;
+
+	sprintf(buff, "%cNo route", RouteSel == 0 ? '*' : ' ');
+   Serial.println(buff);
 	for (int inx = 0; inx < NumRoutes; inx++) {
-		lcd_printlnf(false, 1+inx, "%c%s", RouteSel == 1+inx ? '*' : ' ', RouteFileNames[inx]);
-		}
-	lcd_send_frame();
+		sprintf(buff, "%c%s", RouteSel == 1+inx ? '*' : ' ', RouteFileNames[inx]);
+		Serial.println(buff);
+      }
 	}
 
 
@@ -93,29 +91,8 @@ static void rte_displayRouteSel() {
 
 static bool rte_handleRouteSelEvent() {
    static int countDown = RTE_IDLE_COUNT;
-	if (BtnLPressed) {
-	   btn_clear();
-		countDown = RTE_IDLE_COUNT;
-		if (RouteSel > 0) RouteSel--;
-		rte_displayRouteSel();
-		return false;
-      }
-	if (BtnRPressed) {
-		btn_clear();
-		countDown = RTE_IDLE_COUNT;
-		if (RouteSel < NumRoutes+1)	RouteSel++;
-		rte_displayRouteSel();
-		return false;
-   	}
-	else
-	if (Btn0Pressed || (countDown <= 0)) {
-		btn_clear();
-		return true;
-      }
-   else {
 	   countDown--;
 	   return false;
-   	}
    }
 
 
@@ -134,7 +111,6 @@ static bool rte_loadRoute(char* szFileName) {
    String sz;
    char* szLine;
    char c;
-
    pRoute->numWpts = 0;
    pRoute->nextWptInx = 0;
    File flrte = LittleFS.open(szFileName, FILE_READ);

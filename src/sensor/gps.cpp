@@ -3,7 +3,6 @@
 #include <driver/uart.h>
 #include "config.h"
 #include "drv/cct.h"
-#include "nv/flashlog.h"
 #include "nv/options.h"
 #include "ui/ui.h"
 #include "sensor/gps.h"
@@ -322,46 +321,7 @@ void gps_stateMachine()  {
    } 
 
 
-void gps_updateFlashLogRecord() {
-   static int counter = 0;
-	if ((opt.misc.logType == LOGTYPE_IBG) && FlashLogMutex) {
-		if (xSemaphoreTake( FlashLogMutex, portMAX_DELAY )) {
-		   FlashLogIBGRecord.hdr.gpsFlags = NavPvt.nav.fixType;
-		   FlashLogIBGRecord.gps.timeOfWeekmS = NavPvt.nav.timeOfWeekmS;
-		   FlashLogIBGRecord.gps.heightMSLmm = NavPvt.nav.heightMSLmm;
-		   FlashLogIBGRecord.gps.vertAccuracymm = NavPvt.nav.vertAccuracymm;
-		   FlashLogIBGRecord.gps.velNorthmmps = NavPvt.nav.velNorthmmps;
-		   FlashLogIBGRecord.gps.velEastmmps = NavPvt.nav.velEastmmps;
-		   FlashLogIBGRecord.gps.velDownmmps = NavPvt.nav.velDownmmps;
-		   FlashLogIBGRecord.gps.velAccuracymmps = NavPvt.nav.speedAccuracymmps;
-		   FlashLogIBGRecord.gps.lonDeg7 = NavPvt.nav.lonDeg7;
-		   FlashLogIBGRecord.gps.latDeg7 = NavPvt.nav.latDeg7;	
-         }
-		xSemaphoreGive( FlashLogMutex );
-		}
-   else 
-	if ((opt.misc.logType == LOGTYPE_GPS) && IsGpsTrackActive) {
-      counter++;// 100mS gps fix interval 
-      if (counter >= (opt.misc.trackIntervalSecs*10)) {
-         counter = 0;
-         FlashLogGPSRecord.hdr.magic =FLASHLOG_GPS_MAGIC;
-         FlashLogGPSRecord.hdr.fixType = NavPvt.nav.fixType;
-         FlashLogGPSRecord.hdr.numSV = NavPvt.nav.numSV;
-	      FlashLogGPSRecord.trkpt.posDOP = NavPvt.nav.posDOP;	
-	      FlashLogGPSRecord.trkpt.utcYear = NavPvt.nav.utcYear;
-	      FlashLogGPSRecord.trkpt.utcMonth = NavPvt.nav.utcMonth;
-	      FlashLogGPSRecord.trkpt.utcDay = NavPvt.nav.utcDay;	
-	      FlashLogGPSRecord.trkpt.utcHour = NavPvt.nav.utcHour;
-	      FlashLogGPSRecord.trkpt.utcMinute = NavPvt.nav.utcMinute;
-	      FlashLogGPSRecord.trkpt.utcSecond = NavPvt.nav.utcSecond;	
-	      FlashLogGPSRecord.trkpt.nanoSeconds = NavPvt.nav.nanoSeconds;	
-	      FlashLogGPSRecord.trkpt.heightMSLmm = NavPvt.nav.heightMSLmm;
-	      FlashLogGPSRecord.trkpt.lonDeg7 =  NavPvt.nav.lonDeg7;
-	      FlashLogGPSRecord.trkpt.latDeg7 =  NavPvt.nav.latDeg7;	
-	      flashlog_writeGPSRecord(&FlashLogGPSRecord); 
-         }
-		}		
-	}
+void gps_updateFlashLogRecord() {return;}
 
 
 

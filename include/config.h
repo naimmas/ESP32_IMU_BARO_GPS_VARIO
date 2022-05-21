@@ -35,12 +35,8 @@
 #define MS5611_CS_HI() 	{GPIO.out_w1ts = (1 << pinMS5611CS);}
 #define MS5611_CS_LO() 	{GPIO.out_w1tc = (1 << pinMS5611CS);}
 
-#define IMU_CS_HI() 	{GPIO.out_w1ts = (1 << pinImuCS);}
-#define IMU_CS_LO() 	{GPIO.out_w1tc = (1 << pinImuCS);}
 #define BARO_CS_HI() 	{GPIO.out_w1ts = (1 << pinBaroCS);}
 #define BARO_CS_LO() 	{GPIO.out_w1tc = (1 << pinBaroCS);}
-#define FLASH_CS_HI()   {GPIO.out_w1ts = (1 << pinFlashCS);}
-#define FLASH_CS_LO()   {GPIO.out_w1tc = (1 << pinFlashCS);}
 
 #define pinDRDYINT  4
 

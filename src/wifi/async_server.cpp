@@ -7,7 +7,6 @@
 #include <LittleFS.h>
 #include <Update.h>
 #include "drv/wdog.h"
-#include "nv/flashlog.h"
 #include "async_server.h"
 
 static const char* TAG = "async_server";
@@ -180,15 +179,7 @@ static String server_string_processor(const String& var) {
     if (var == "BUILD_TIMESTAMP") {
         return String(__DATE__) + " " + String(__TIME__); 
         }
-    else
-    if (var == "TOTALDATALOG") {
-        return server_ui_size(FLASH_SIZE_BYTES);
-        }
-    if (var == "USEDDATALOG") {
-        return server_ui_size(FlashLogFreeAddress);
-        }
-    else
-        return "?";
+    return "";
     }
 
 
@@ -211,17 +202,6 @@ static int littlefs_chunked_read(uint8_t* buffer, size_t maxLen) {
 
 // chunked download for the IMU/GPS data log stored in external spi flash. 
 // returns buffer with up to maxLen bytes read
-static int datalog_chunked_read(uint8_t* buffer, size_t maxLen, size_t index) {
-  int bytesRemaining = (int)(FlashLogFreeAddress - (uint32_t)index);
-  if (bytesRemaining) {
-    int numBytes =  bytesRemaining > 256 ? 256 : bytesRemaining;  
-    spiflash_readBuffer(index, buffer, numBytes);
-    return numBytes;
-    }
-  else {
-    return 0;
-    }
-  }
 
 
 // define the handlers
@@ -247,19 +227,8 @@ void server_configure() {
 
   server->on("/datalog", HTTP_GET, [](AsyncWebServerRequest * request) {
     ESP_LOGD(TAG,"Client: %s %s",request->client()->remoteIP().toString().c_str(), request->url().c_str());
-    if (FlashLogFreeAddress) {
-      AsyncWebServerResponse *response = request->beginResponse("application/octet-stream", FlashLogFreeAddress, [](uint8_t *buffer, size_t maxLen, size_t index) -> size_t {
-        feed_watchdog(); // prevent watchdog resets when downloading large files
-        return datalog_chunked_read(buffer, maxLen, index);
-      });
-      response->addHeader("Content-Disposition", "attachment; filename=datalog");
-      response->addHeader("Connection", "close");
-      request->send(response);
-      }
-    else {
       request->send(400, "text/plain", "ERROR : no data log found");
-      }
-    ESP_LOGD(TAG," Datalog Download : Success");
+    ESP_LOGD(TAG," Datalog Download : Failed");
     });
 
   server->on("/directory", HTTP_GET, [](AsyncWebServerRequest * request)  {

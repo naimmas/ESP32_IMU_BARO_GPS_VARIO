@@ -6,15 +6,14 @@
 #include "config.h"
 #include "drv/cct.h"
 #include "drv/wdog.h"
-#include "sensor/mpu9250.h"
+
+#include "MPU9250.h"
+
 #include "sensor/gps.h"
-#include "sensor/madc.h"
 #include "sensor/ringbuf.h"
 #include "sensor/imu.h"
 #include "sensor/ms5611.h"
 #include "sensor/kalmanfilter4d.h"
-#include "nv/flashlog.h"
-#include "nv/calib.h"
 #include "nv/options.h"
 #include "wifi/async_server.h"
 #include "ui/ui.h"
@@ -41,7 +40,7 @@ static void gps_task(void *pvParameter);
 static void vario_task(void *pvParameter);
 static void main_task(void* pvParameter);
 static void IRAM_ATTR drdyHandler(void);
-
+MPU9250 mpu9250;
 void pinConfig() {	
     // using NS8002 amp module, external 100K pullup resistor to 5V. Pull down to enable.
 
@@ -123,64 +122,22 @@ static void IRAM_ATTR drdyHandler(void) {
 
 static void vario_taskConfig() {
     ESP_LOGI(TAG, "vario config");
-    if (mpu9250_config() < 0) {
+    if (mpu9250.setup(0x68) != true) {
         ESP_LOGE(TAG, "error MPU9250 config");
 		Serial.println("MPU9250 config failed");
         while (1) {delayMs(100);};
         }
-    // if calib.txt not found, enforce accel and mag calibration and write new calib.txt
-    bool isAccelMagCalibRequired = !IsCalibrated;
-    int counter = 300;
-    while ((!isAccelMagCalibRequired) && counter--) {
-
-   	    sprintf(buffer, "Gyro calib in %ds",(counter+50)/100);
-           Serial.println(buffer);
-            // manually force accel+mag calibration by pressing BTN0 during gyro calib countdown
-           
-            //isAccelMagCalibRequired = true; 
-            //break;
-
-        delayMs(10);	
-		}
+    bool isAccelMagCalibRequired = true;
     if (isAccelMagCalibRequired) {
-        counter = 8;
-        while (counter--) {
-            sprintf(buffer, "Accel calib in %ds",counter+1);
-            Serial.println(buffer);
-            delayMs(1000);	
-            }
-        Serial.println("Calibrating Accel...");
-        if (mpu9250_calibrateAccel() < 0) {
- 	        Serial.println("Accel calib failed");
-            while (1) {delayMs(100);};
-            }
+        Serial.println("Calibrating Accel Gyro...");
+        mpu9250.calibrateAccelGyro();
         delayMs(1000);
-        counter = 5;
-        while (counter--) {
-            sprintf(buffer, "Mag calib in %ds",counter+1);
-            Serial.println(buffer);
-            delayMs(1000);	
-            }
         Serial.println("Calibrating Mag...");
-        if (mpu9250_calibrateMag()  < 0 ) {
- 	        Serial.println("Mag calib failed");
-            }
-        }
-    if (isAccelMagCalibRequired) {
-        counter = 3;
-        while (counter--) {
-            sprintf(buffer, "Gyro calib in %ds",counter+1);
-            Serial.println(buffer);
-            }
-        }
-    Serial.println("Calibrating Gyro...");
-    if (mpu9250_calibrateGyro() < 0) {
- 	    Serial.println("Gyro calib fail");
-        delayMs(1000);
+        mpu9250.calibrateMag();
+        isAccelMagCalibRequired = false;
         }
    // mpu9250_dump_noise_samples();
 
-#if USE_MS5611
     if (ms5611_config() < 0) {
         ESP_LOGE(TAG, "error MS5611 config");
         Serial.println("MS5611 config fail");
@@ -190,7 +147,6 @@ static void vario_taskConfig() {
     ESP_LOGD(TAG,"MS5611 Altitude %dm Temperature %dC", (int)(ZCmAvg_MS5611/100.0f), (int)CelsiusSample_MS5611);
     float zcm = ZCmAvg_MS5611;
     ms5611_initializeSampleStateMachine();
-#endif
 
     // KF4D algorithm to fuse gravity-compensated acceleration and pressure altitude to estimate
     // altitude and climb/sink rate
@@ -229,7 +185,16 @@ static void vario_task(void *pvParameter) {
         clockPrevious = clockNow;
         drdyCounter++;
         baroCounter++;
-        mpu9250_getGyroAccelMagData( &gxdps, &gydps, &gzdps, &axmG, &aymG, &azmG, &mx, &my, &mz);
+
+        gxdps = mpu9250.getGyroX();
+        gydps = mpu9250.getGyroY();
+        gzdps = mpu9250.getGyroZ();
+        axmG  = mpu9250.getAccX();
+        aymG  = mpu9250.getAccY();
+        azmG  = mpu9250.getAccZ();
+        mx    = mpu9250.getMagX();
+        my    = mpu9250.getMagY();
+        mz    = mpu9250.getMagZ();
         // translate from sensor axes to AHRS NED (north-east-down) right handed coordinate frame      
         axNEDmG = -aymG;
         ayNEDmG = -axmG;
@@ -262,40 +227,9 @@ static void vario_task(void *pvParameter) {
                 kalmanFilter4d_update(ZCmSample_MS5611, zAccelAverage, (float*)&KFAltitudeCm, (float*)&KFClimbrateCps);
                 kfTimeDeltaUSecs = 0.0f;
                 // LCD display shows damped climbrate
-                DisplayClimbrateCps = (DisplayClimbrateCps*(float)opt.vario.varioDisplayIIR + KFClimbrateCps*(100.0f - (float)opt.vario.varioDisplayIIR))/100.0f; 
-			    if ((opt.misc.logType == LOGTYPE_IBG) && FlashLogMutex) {
-			        if ( xSemaphoreTake( FlashLogMutex, portMAX_DELAY )) {
-                        FlashLogIBGRecord.hdr.baroFlags = 1;
-				        FlashLogIBGRecord.baro.heightMSLcm = ZCmSample_MS5611;
-					    xSemaphoreGive( FlashLogMutex );
-					    }
-				    }
+                DisplayClimbrateCps = (DisplayClimbrateCps*(float)opt.vario.varioDisplayIIR + KFClimbrateCps*(100.0f - (float)opt.vario.varioDisplayIIR))/100.0f;
                 }    
-            } 
-        if ((opt.misc.logType == LOGTYPE_IBG) && FlashLogMutex) {
-		    if (xSemaphoreTake( FlashLogMutex, portMAX_DELAY )) {      
-                FlashLogIBGRecord.hdr.magic = FLASHLOG_IBG_MAGIC;
-			  	FlashLogIBGRecord.imu.gxNEDdps = gxNEDdps;
-			    FlashLogIBGRecord.imu.gyNEDdps = gyNEDdps;
-			    FlashLogIBGRecord.imu.gzNEDdps = gzNEDdps;
-			    FlashLogIBGRecord.imu.axNEDmG = axNEDmG;
-			    FlashLogIBGRecord.imu.ayNEDmG = ayNEDmG;
-			    FlashLogIBGRecord.imu.azNEDmG = azNEDmG;
-			    FlashLogIBGRecord.imu.mxNED = mxNED;
-			    FlashLogIBGRecord.imu.myNED = myNED;
-			    FlashLogIBGRecord.imu.mzNED = mzNED;
-                // worst case imu+baro+gps record = 80bytes,
-                //  ~130uS intra-page, ~210uS across page boundary
-                if (IsLoggingIBG) {
-                    // out of memory, indicate in UI that logging has stopped
-   	                if (flashlog_writeIBGRecord(&FlashLogIBGRecord) < 0) {
-                        IsLoggingIBG = false;
-                        } 
-                    memset(&FlashLogIBGRecord, 0, sizeof(FLASHLOG_IBG_RECORD));
-                    }
-				xSemaphoreGive( FlashLogMutex );
-				}			
-	        }  
+            }   
 #ifdef IMU_DEBUG
         uint32_t eus = cct_elapsedUs(marker);
 		LED_OFF(); // scope the led on-time to ensure worst case < 2mS
@@ -348,7 +282,6 @@ static void main_task(void* pvParameter) {
 	}    
     //littlefs_directory_listing();
     // read calibration parameters from calib.txt
-    calib_init();
     // set default configuration parameters, then override them with configuration parameters read from options.txt
     // so you only have to specify the parameters you want to modify, in the file options.txt
     opt_init();
@@ -357,8 +290,9 @@ static void main_task(void* pvParameter) {
     // HSPI bus used for 128x64 LCD display
     
     BacklitCounter = opt.misc.backlitSecs*40;
-    adc_init();
-    SupplyVoltageV = adc_battery_voltage();
+
+    // adc_init();
+    SupplyVoltageV = 10;//adc_battery_voltage();
     ESP_LOGD(TAG, "Power = %.1fV", SupplyVoltageV);
 
     sprintf(buffer, "%s %s", __DATE__, __TIME__);
@@ -370,11 +304,6 @@ static void main_task(void* pvParameter) {
 
     // VSPI bus used for MPU9250, MS5611 and 128Mbit spi flash
     // start with low clock frequency for sensor configuration
-    if (flashlog_init() < 0) {
-	    ESP_LOGE(TAG, "Spi flash log error");
-	    Serial.println("Flash Error");		
-	    while (1) {delayMs(100);}
-	    }
 
     //lcd_printlnf(true,3,"Data log : %d %% used", DATALOG_PERCENT_USED()); 
     

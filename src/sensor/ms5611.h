@@ -12,6 +12,9 @@
 #define MS5611_CMD_ADC_READ   	0x00
 #define MS5611_CMD_ADC_4096 	0x08
 
+#define MS5611_ADDRESS                (0x77)
+#define MS5611_CMD_READ_PROM          (0xA2)
+
 
 void 	ms5611_triggerPressureSample(void);
 void 	ms5611_triggerTemperatureSample(void);
@@ -26,9 +29,13 @@ void 	ms5611_initializeSampleStateMachine(void);
 float  	ms5611_pa2Cm(float pa);
 void 	ms5611_measure_noise();	
 uint8_t ms5611_CRC4(uint8_t prom[] );
-int 	ms5611_readPROM(void);
+void 	ms5611_readPROM(void);
 void 	ms5611_getCalibrationParameters(void);
 void 	ms5611_reset(void);
+
+
+uint32_t readRegister24(uint8_t reg);
+uint16_t readRegister16(uint8_t reg);
 
 extern	float ZCmAvg_MS5611;
 extern	float ZCmSample_MS5611;

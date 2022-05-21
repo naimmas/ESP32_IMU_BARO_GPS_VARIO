@@ -1,15 +1,14 @@
 #include "common.h"
 #include "config.h"
 #include "drv/cct.h"
-#include "drv/vspi.h"
 #include "sensor/ms5611.h"
+#include <Wire.h>
 
 float ZCmAvg_MS5611;
 float ZCmSample_MS5611;
 float PaSample_MS5611;
 int   CelsiusSample_MS5611;
 
-static uint8_t  Prom_[16];
 static uint16_t Cal_[6];
 static int64_t  Tref_;
 static int64_t  OffT1_;
@@ -30,10 +29,7 @@ int ms5611_config(void) {
 	CelsiusSample_MS5611 = 0;
 	ZCmAvg_MS5611 = 0.0f;
 	//ms5611_reset();
-	if (!ms5611_readPROM()) {
-		ESP_LOGE(TAG, "Error reading calibration PROM");
-		return -1;
-		}
+	ms5611_readPROM();
 	ms5611_getCalibrationParameters();
 #if MS5611_MEASURE_NOISE	
 	ms5611_measure_noise();
@@ -175,39 +171,69 @@ float ms5611_pa2Cm(float paf)  {
    	return zf;
    	}
 
+uint32_t readRawTemperature(void)
+{
+    Wire.beginTransmission(MS5611_ADDRESS);
 
-void ms5611_triggerPressureSample(void) {
-	spiSimpleTransaction(_vspi);
-   	MS5611_CS_LO();
-	spiTransferByteNL(_vspi, MS5611_CMD_CONVERT_D1|MS5611_CMD_ADC_4096);
-	MS5611_CS_HI();
-	spiEndTransaction(_vspi);
-	}
+    #if ARDUINO >= 100
+	Wire.write(MS5611_CMD_CONVERT_D2 | MS5611_CMD_ADC_4096);
+    #else
+	Wire.send(MS5611_CMD_CONVERT_D2 | MS5611_CMD_ADC_4096);
+    #endif
 
+    Wire.endTransmission();
 
-void ms5611_triggerTemperatureSample(void) {
-	spiSimpleTransaction(_vspi);
-   	MS5611_CS_LO();
-   	spiTransferByteNL(_vspi, MS5611_CMD_CONVERT_D2|MS5611_CMD_ADC_4096);
-   	MS5611_CS_HI();
-	spiEndTransaction(_vspi);
-	}
+    delay(MS5611_SAMPLE_PERIOD_MS);
 
+    return readRegister24(MS5611_CMD_ADC_READ);
+}
 
-uint32_t ms5611_readSample(void)	{
-	uint32_t w, b0, b1, b2;
-	spiSimpleTransaction(_vspi);
-	MS5611_CS_LO();
-	spiTransferByteNL(_vspi, MS5611_CMD_ADC_READ);
-	b0 = (uint32_t)spiTransferByteNL(_vspi, 0);
-	b1 = (uint32_t)spiTransferByteNL(_vspi, 0);
-	b2 = (uint32_t)spiTransferByteNL(_vspi, 0);
-	w = ((b0<<16) | (b1<<8) | b2);
-	MS5611_CS_HI();
-	spiEndTransaction(_vspi);
-	return w;
-	}
+uint32_t readRawPressure(void)
+{
+    Wire.beginTransmission(MS5611_ADDRESS);
 
+    #if ARDUINO >= 100
+	Wire.write(MS5611_CMD_CONVERT_D1 | MS5611_CMD_ADC_4096);
+    #else
+	Wire.send(MS5611_CMD_CONVERT_D1 | S5611_CMD_ADC_4096);
+    #endif
+
+    Wire.endTransmission();
+
+    delay(MS5611_SAMPLE_PERIOD_MS);
+
+    return readRegister24(MS5611_CMD_ADC_READ);
+}
+
+uint32_t readRegister24(uint8_t reg)
+{
+    uint32_t value;
+    Wire.beginTransmission(MS5611_ADDRESS);
+    #if ARDUINO >= 100
+        Wire.write(reg);
+    #else
+        Wire.send(reg);
+    #endif
+    Wire.endTransmission();
+
+    Wire.beginTransmission(MS5611_ADDRESS);
+    Wire.requestFrom(MS5611_ADDRESS, 3);
+    while(!Wire.available()) {};
+#if ARDUINO >= 100
+        uint8_t vxa = Wire.read();
+        uint8_t vha = Wire.read();
+        uint8_t vla = Wire.read();
+    #else
+        uint8_t vxa = Wire.receive();
+        uint8_t vha = Wire.receive();
+        uint8_t vla = Wire.receive();
+#endif
+    Wire.endTransmission();
+
+    value = ((int32_t)vxa << 16) | ((int32_t)vha << 8) | vla;
+
+    return value;
+}
 
 void ms5611_calculateTemperatureC(void) {
 	DT_ = (int64_t)D2_ - Tref_;
@@ -241,19 +267,20 @@ float ms5611_calculatePressurePa(void) {
 
 
 void ms5611_reset(void) {
-	MS5611_CS_LO();
-	spiTransferByteNL(_vspi, MS5611_CMD_RESET);
-	MS5611_CS_HI();
-	spiEndTransaction(_vspi);
-	cct_delayUs(4000); // > 3mS as per app note AN520	
+	Wire.beginTransmission(MS5611_ADDRESS);
+
+    #if ARDUINO >= 100
+	Wire.write(MS5611_CMD_RESET);
+    #else
+	Wire.send(MS5611_CMD_RESET);
+    #endif
+
+    Wire.endTransmission();
+	delay(4);
    }
 
    	
 void ms5611_getCalibrationParameters(void)  {
-   for (int inx = 0; inx < 6; inx++) {
-		int promIndex = 2 + inx*2; 
-		Cal_[inx] = (((uint16_t)Prom_[promIndex])<<8) | (uint16_t)Prom_[promIndex+1];
-		}
    ESP_LOGI(TAG,"Calib Coeffs : %d %d %d %d %d %d",Cal_[0],Cal_[1],Cal_[2],Cal_[3],Cal_[4],Cal_[5]);
    Tref_ = ((int64_t)Cal_[4])<<8;
    OffT1_ = ((int64_t)Cal_[1])<<16;
@@ -261,19 +288,40 @@ void ms5611_getCalibrationParameters(void)  {
    }
    
 
-int ms5611_readPROM(void)    {
-   for (int inx = 0; inx < 8; inx++) {
-    	MS5611_CS_LO();
-	spiTransferByteNL(_vspi, 0xA0 + inx*2);
-	Prom_[inx*2] = spiTransferByteNL(_vspi, 0);
-	Prom_[inx*2+1] = spiTransferByteNL(_vspi, 0);
-	MS5611_CS_HI();
-	}			
-   uint8_t crcPROM = Prom_[15] & 0x0F;
-   uint8_t crcCalculated = ms5611_CRC4(Prom_);
-   return (crcCalculated == crcPROM ? 1 : 0);
+void ms5611_readPROM(void)    {
+    for (uint8_t offset = 0; offset < 6; offset++)
+    {
+	Cal_[offset] = readRegister16(MS5611_CMD_READ_PROM + (offset * 2));
+    }
    }
 	
+uint16_t readRegister16(uint8_t reg)
+{
+    uint16_t value;
+    Wire.beginTransmission(MS5611_ADDRESS);
+    #if ARDUINO >= 100
+        Wire.write(reg);
+    #else
+        Wire.send(reg);
+    #endif
+    Wire.endTransmission();
+
+    Wire.beginTransmission(MS5611_ADDRESS);
+    Wire.requestFrom(MS5611_ADDRESS, 2);
+    while(!Wire.available()) {};
+    #if ARDUINO >= 100
+        uint8_t vha = Wire.read();
+        uint8_t vla = Wire.read();
+    #else
+        uint8_t vha = Wire.receive();
+        uint8_t vla = Wire.receive();
+    #endif
+    Wire.endTransmission();
+
+    value = vha << 8 | vla;
+
+    return value;
+}
 	
 uint8_t ms5611_CRC4(uint8_t prom[] ) {
    int cnt, nbit; 
